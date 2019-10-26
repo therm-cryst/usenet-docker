@@ -1,0 +1,316 @@
+# Instructions
+# ====================
+#
+# Assumes a linux-ish host operating system. Example commands from an ubuntu
+# host.
+#
+# Overview
+# --------
+#
+# A little bit of docker-compose overview as well as overview specific to this
+# usenet-centric file.
+#
+# The basic idea of a docker-compose file is that you declare everything you
+# need for every service in one central location and you can configure which
+# services depend on other services.
+#
+# By default, each service is isolated from each other, from the host system,
+# and from the network.  Here we "punch holes" through this isolation to allow
+# communication between the services and between the services and the host.
+#
+# Take sonarr for example.  Sonarr requires nzbget and hydra to be running so we
+# set up it's configuration so that it won't start until both of those running.
+# Sonarr also needs access to the directory where nzbget saves downloads, as
+# well as to the directories where sonarr will move your media to. It also has a
+# web interface, so it needs to be able to serve data over a port.
+#
+# Docker has multiple ways to configure what it calls "volumes"...places to
+# store data. Here we map directories on the host system "into" the container
+# for sonarr. Something like this:
+#
+# volumes:
+#   - ./downloads:/downloads
+#   - /media/TV:/data/tv1
+#   - /media2/TV:/data/tv2
+#
+# From the perspective of sonarr it will see a `/downloads` directory. Files
+# read by Sonarr in the `/downloads` dir are actually being read from the
+# `./downloads` directory relative to wherever you've saved this
+# docker-compose.yml file on the host system.
+#
+# The same holds true for the other volumes.  Inside the sonarr container there
+# are `/data/tv1` and a `/data/tv2` directories, but create/read/update/delete
+# operations done by sonarr in those directories are actually happening in the
+# `/media/TV` and `/media2/TV` directories on the host system.
+#
+# Just to drive the point home, when you use one of the locations in the sonarr
+# UI where you can browse the filesystem you'll see `/data/tv1` and `/data/tv2`.
+# The `/media/*` folders will not be found...in fact, none of the folders on
+# your host will be found other than what you map into the container via the
+# `volumes` config.
+#
+# Since sonarr also needs to serve its user interface, we also add a section
+# like this:
+#
+# ports: 
+#   - 12413:8989
+#
+# Sonarr listens on port 8989.  We "map" that to port 12413 on the host.  So, to
+# connect to Sonarr, you connect to something like http://localhost:12413.
+#
+# If you change sonarr's configuration via it's web UI to a port other than
+# 8989, then you have to change this file to reflect that.
+#
+#
+# Recommended users/groups configuration
+# --------------------------------------
+#
+# The following configuration is a best-practices recommendation whether you're
+# using docker or not.
+#
+# 1. Create a group that has access to your media folder(s). 
+#   * `sudo groupadd mediadist`
+#   * Get the group id for `mediadist`:
+#      ```
+#      $ getent group mediadist | awk -F: '{printf "%s GID=%d\n", $1, $3}
+#      mediadist GID=1001
+#      ```
+#   * Recursively change the persmissions and group of your media storage
+#     directories so that mediadist has access.  Something like:
+#     ```
+#     $ chgrp -R mediadist /media
+#     $ find /media -type f -exec chmod 664 {} \;
+#     $ find /media -type d -exec chmod 775 {} \;
+#     ```
+#
+# 2. Create a system user for nzbget with our mediadist groupid.
+#     ```
+#     $ sudo adduser --system --no-create-home --gid 1001 nzbget
+#     Adding system user `nzbget' (UID 124) ...
+#     Adding new user `nzbget' (UID 124) with group `mediadist' ...
+#     Not creating home directory `/home/nzbget'.
+#     ```
+#
+# 3. Create a system user for hydra2 with our medaidist groupid
+#     ```
+#     $ sudo adduser --system --no-create-home --gid 1001 hydra2
+#     Adding system user `hydra2' (UID 125) ...
+#     Adding new user `hydra2' (UID 125) with group `mediadist' ...
+#     Not creating home directory `/home/hydra2'.
+#     ```
+#
+# 4. Create a system user for sonarr with our mediadist groupid.
+#     ```
+#     $ sudo adduser --system --no-create-home --gid 1001 sonarr
+#     Adding system user `sonarr' (UID 126) ...
+#     Adding new user `sonarr' (UID 124) with group `mediadist' ...
+#     Not creating home directory `/home/sonarr'.
+#     ```
+#
+# 5. Create a system user for radarr with our mediadist groupid.
+#     ```
+#     $ sudo adduser --system --no-create-home --gid 1001 radarr
+#     Adding system user `radarr' (UID 127) ...
+#     Adding new user `radarr' (UID 124) with group `mediadist' ...
+#     Not creating home directory `/home/radarr'.
+#     ```
+#
+#
+# Not-recommended configuration
+# -----------------------------
+#
+# If you choose this, the easy, but not-best route, you just use the user and
+# group ids of an existing user in all the configuration sections below.
+
+
+# Tell docker-compose the configuration format version we're using.
+version: '3'
+
+# This section is where we start configuring the containers.
+services:
+
+  # Creating the nzbget container...
+  nzbget:
+
+    # Uses the docker hub image maintained by the linuxserver organization
+    image: linuxserver/nzbget
+
+    container_name: nzbget
+
+    # the linuxserver/nzbget image supports some variables that can be
+    # used to configure how it operates.
+    environment:
+
+      # Run as the specified user.
+      # If you're using the recommended configuration, PUID should be the UID you get in Step #2
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - PUID=120  
+
+      # Run as the specified group.
+      # If you're using the recommended configuration, PUID should be the GID you get in Step #1
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - PGID=1001  
+
+      # See https://en.wikipedia.org/wiki/List_of_tz_database_time_zones 
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - TZ=America/Chicago
+
+    # set up where nzbget stores its data
+    volumes:
+
+      # With this volume, nzbget will save it's configuration, logs, database, etc in the folder 
+      # `./nzbget/config` relative to this docker-compose.yml file.  
+      #
+      # You can of course change the `./nzbget/config` part of the next line to wherever you want.  
+      # For example, if you wanted to store nzbget's config directory in `/foo/bar/baz`, you would 
+      # change the following line to: `- /foo/bar/baz:/config`
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - ./nzbget/config:/config
+      
+      # With this volume, nzbget will save it's in-progress downloads and completed downloads
+      # in the folder `./downloads` relative to this docker-compose.yml file.
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - ./downloads:/downloads
+
+    # set up the port that nzbget is accessible from
+    ports: 
+
+      # here we just expose nzbget on 6789.  If you wanted to make nzbget served on, for example, 
+      # 16482 you would use:  `- 16842:6789`
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - 6789:6789
+    
+    # docker will restart this container anytime it stops unless you manually stopped it.
+    # this also means it will start this container when the system boots up.
+    restart: unless-stopped
+
+  # creating the hydra 2 container...
+  hydra2:
+
+    # Uses the docker hub image maintained by the linuxserver organization
+    image: linuxserver/hydra2
+
+    container_name: hydra2
+
+    # env vars for configuring container
+    environment:
+      # hydra2 user's id
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - PUID=125
+
+      # media group
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - PGID=1001
+
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - TZ=America/Chicago
+    volumes:
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - ./hydra2/config:/config
+
+      # hydra downloads nzb files, this is where to put them
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - ./hydra2/nzbs:/downloads
+
+    ports:
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - 5076:5076
+
+    restart: unless-stopped
+
+  sonarr:
+
+    image: linuxserver/sonarr:preview
+
+    container_name: sonarr
+
+    environment:
+      # sonarr user's id
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - PUID=122
+
+      # media group
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - PGID=1001
+
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - TZ=America/Chicago
+
+      # This will ensure files have the sonarr user, and media group when moved to your 
+      # media storage director(y|ies)
+      - UMASK_SET=022
+
+    volumes:
+      # The directory for sonarr's config
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - ./sonarr/config:/config
+
+      # Here you can specify all the root folders for where your media is stored.
+      # In the example configuration here, we've got four root folders mapped into 
+      # the `/data` folder inside the container.
+      #
+      # This means that the root folders from sonarr's viewpoint will be `/data/tv1`, etc
+      # You need at least one, and you can go up to as many as you want...it will just
+      # depend upon the storage you're using.
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME >>>>>>>>>>>>>>>>>>
+      - /tank1/Media/TV:/data/tv1
+      - /tank2/Media/TV:/data/tv2
+      - /tank3/Media/TV:/data/tv3
+      - /tank4/Media/TV:/data/tv4
+
+      # this should point to the directory where you have nzbget configured to save downloads to
+      #
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - ./downloads:/downloads
+
+    ports:
+      # <<<<<<<<<<<<<<<<< CHANGE ME...MAYBE >>>>>>>>>>>>>>>>>>
+      - 8989:8989
+    restart: unless-stopped
+
+    # This container won't start until these services are started
+    depends_on:
+      - nzbget
+      - hydra2
+
+  radarr:
+
+    image: linuxserver/radarr
+
+    container_name: radarr
+
+    environment:
+      - PUID=123
+      - PGID=1001
+      - TZ=America/Chicago
+      - UMASK_SET=022
+    
+    volumes:
+      - ./radarr/config:/config
+      - /tank1/Media/Film:/data/film1
+      - /tank2/Media/Film:/data/film2
+      - /tank3/Media/Film:/data/film3
+      - /tank4/Media/Film:/data/film4
+      - ./downloads:/downloads
+    
+    ports:
+      - 7878:7878
+
+    restart: unless-stopped
+
+    depends_on:
+      - nzbget
+      - hydra2
